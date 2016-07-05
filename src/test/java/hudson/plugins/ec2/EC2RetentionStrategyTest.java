@@ -3,6 +3,14 @@ package hudson.plugins.ec2;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.services.ec2.model.InstanceType;
 
+import hudson.model.Label;
+import hudson.model.Node;
+import hudson.model.Queue;
+import hudson.model.ResourceList;
+import hudson.model.Queue.Executable;
+import hudson.model.Queue.Task;
+import hudson.model.queue.AbstractQueueTask;
+import hudson.model.queue.CauseOfBlockage;
 import hudson.slaves.NodeProperty;
 import hudson.model.Executor;
 import hudson.model.Node;
@@ -10,16 +18,19 @@ import hudson.model.Node;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import jenkins.model.Jenkins;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.temporal.ChronoField;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
 
@@ -56,6 +67,34 @@ public class EC2RetentionStrategyTest {
             // reset the assumption
             idleTimeoutCalled.set(false);
         }
+    }
+
+    public void testRetentionWhenQueueHasWaitingItemForThisNode() throws Exception {
+        EC2RetentionStrategy rs = new EC2RetentionStrategy("-2");
+        EC2Computer computer = computerWithIdleTime(59, 0);
+        final Label selfLabel = computer.getNode().getSelfLabel();
+        final Queue queue = Jenkins.getInstance().getQueue();
+        final Task task = taskForLabel(selfLabel, false);
+        queue.schedule(task, 500);
+        rs.check(computer);
+        assertFalse("Expected computer to be left running", idleTimeoutCalled.get());
+        queue.cancel(task);
+        rs.check(computer);
+        assertTrue("Expected computer to be idled", idleTimeoutCalled.get());
+    }
+
+    public void testRetentionWhenQueueHasBlockedItemForThisNode() throws Exception {
+        EC2RetentionStrategy rs = new EC2RetentionStrategy("-2");
+        EC2Computer computer = computerWithIdleTime(59, 0);
+        final Label selfLabel = computer.getNode().getSelfLabel();
+        final Queue queue = Jenkins.getInstance().getQueue();
+        final Task task = taskForLabel(selfLabel, true);
+        queue.schedule(task, 0);
+        rs.check(computer);
+        assertFalse("Expected computer to be left running", idleTimeoutCalled.get());
+        queue.cancel(task);
+        rs.check(computer);
+        assertTrue("Expected computer to be idled", idleTimeoutCalled.get());
     }
 
     private EC2Computer computerWithIdleTime(final int minutes, final int seconds) throws Exception {
@@ -192,5 +231,71 @@ public class EC2RetentionStrategyTest {
             long newNextCheckAfter = rs.getNextCheckAfter();
             assertEquals(String.format("Expected elapsed time of %s ms to %s internalCheck.", startingUptime, action), expectCallCheck, nextCheckAfter != newNextCheckAfter);
         }
+    }
+
+    private Queue.Task taskForLabel(final Label label, boolean blocked) {
+        final CauseOfBlockage cob = blocked ? new CauseOfBlockage() {
+            @Override
+            public String getShortDescription() {
+                return "Blocked";
+            }
+        } : null;
+        return new AbstractQueueTask() {
+            public ResourceList getResourceList() {
+                return null;
+            }
+
+            public Node getLastBuiltOn() {
+                return null;
+            }
+
+            public long getEstimatedDuration() {
+                return -1;
+            }
+
+            public Label getAssignedLabel() {
+                return label;
+            }
+
+            public Executable createExecutable() throws IOException {
+                return null;
+            }
+
+            public String getDisplayName() {
+                return null;
+            }
+
+            @Override
+            public CauseOfBlockage getCauseOfBlockage() {
+                return cob;
+            }
+
+            public boolean isBuildBlocked() {
+                return cob != null;
+            }
+
+            public boolean hasAbortPermission() {
+                return false;
+            }
+
+            public String getWhyBlocked() {
+                return cob == null ? null : cob.getShortDescription();
+            }
+
+            public String getUrl() {
+                return null;
+            }
+
+            public String getName() {
+                return null;
+            }
+
+            public String getFullDisplayName() {
+                return null;
+            }
+
+            public void checkAbortPermission() {
+            }
+        };
     }
 }
