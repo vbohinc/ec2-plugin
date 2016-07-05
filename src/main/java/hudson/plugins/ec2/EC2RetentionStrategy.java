@@ -24,8 +24,11 @@
 package hudson.plugins.ec2;
 
 import hudson.model.Descriptor;
+import hudson.model.Label;
+import hudson.model.Queue;
 import hudson.slaves.RetentionStrategy;
 import hudson.util.TimeUnit2;
+import jenkins.model.Jenkins;
 
 import java.lang.NullPointerException;
 import java.util.concurrent.locks.ReentrantLock;
@@ -98,7 +101,7 @@ public class EC2RetentionStrategy extends RetentionStrategy<EC2Computer> {
             if (idleTerminationMinutes > 0) {
                 // TODO: really think about the right strategy here, see
                 // JENKINS-23792
-                if (idleMilliseconds > TimeUnit2.MINUTES.toMillis(idleTerminationMinutes)) {
+                if (idleMilliseconds > TimeUnit2.MINUTES.toMillis(idleTerminationMinutes) && !itemsInQueueForThisSlave(c)) {
                     LOGGER.info("Idle timeout of " + c.getName() + " after "
                             + TimeUnit2.MILLISECONDS.toMinutes(idleMilliseconds) + " idle minutes");
                     c.getNode().idleTimeout();
@@ -118,7 +121,7 @@ public class EC2RetentionStrategy extends RetentionStrategy<EC2Computer> {
                 // if we have less "free" (aka already paid for) time left than
                 // our idle time, stop/terminate the instance
                 // See JENKINS-23821
-                if (freeSecondsLeft <= (Math.abs(idleTerminationMinutes * 60))) {
+                if (freeSecondsLeft <= (Math.abs(idleTerminationMinutes * 60)) && !itemsInQueueForThisSlave(c)) {
                     LOGGER.info("Idle timeout of " + c.getName() + " after "
                             + TimeUnit2.MILLISECONDS.toMinutes(idleMilliseconds) + " idle minutes, with "
                             + TimeUnit2.MILLISECONDS.toMinutes(freeSecondsLeft)
@@ -128,6 +131,28 @@ public class EC2RetentionStrategy extends RetentionStrategy<EC2Computer> {
             }
         }
         return 1;
+    }
+
+    /*
+     * Checks if there are any items in the queue that are waiting for this node explicitly.
+     * This prevents a node from being taken offline while there are Ivy/Maven Modules waiting to build.
+     * Need to check entire queue as some modules may be blocked by upstream dependencies.
+     * Accessing the queue in this way can block other threads, so only perform this check just prior
+     * to timing out the slave.
+     */
+    private boolean itemsInQueueForThisSlave(EC2Computer c) {
+        final Label selfLabel = c.getNode().getSelfLabel();
+        Queue.Item[] items = Jenkins.getInstance().getQueue().getItems();
+        for (int i = 0; i < items.length; i++) {
+            Queue.Item item = items[i];
+            final Label assignedLabel = item.getAssignedLabel();
+            if (assignedLabel == selfLabel) {
+                LOGGER.fine("Preventing idle timeout of " + c.getName()
+                        + " as there is at least one item in the queue explicitly waiting for this slave");
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
