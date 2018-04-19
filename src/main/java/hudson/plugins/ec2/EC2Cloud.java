@@ -278,6 +278,8 @@ public abstract class EC2Cloud extends Cloud {
         Set<String> instanceIds = new HashSet<String>();
         String description = template != null ? template.description : null;
 
+        LOGGER.log(Level.FINE, "Template description: " + (template != null ? template.description : "empty"));
+        LOGGER.log(Level.FINE, "Template AMI: " + (template != null ? template.getAmi() : "empty"));
         for (Reservation r : connect().describeInstances().getReservations()) {
             for (Instance i : r.getInstances()) {
                 if (isEc2ProvisionedAmiSlave(i.getTags(), description) && (template == null
@@ -292,6 +294,7 @@ public abstract class EC2Cloud extends Cloud {
                 }
             }
         }
+        LOGGER.log(Level.FINE, "Found " + n + " running instances, now counting spot instance requests");
         List<SpotInstanceRequest> sirs = null;
         List<Filter> filters = new ArrayList<Filter>();
         List<String> values;
@@ -323,10 +326,14 @@ public abstract class EC2Cloud extends Cloud {
 
                     if (isEc2ProvisionedAmiSlave(sir.getTags(), description)) {
                         LOGGER.log(Level.FINE, "Spot instance request found: " + sir.getSpotInstanceRequestId() + " AMI: "
-                                + sir.getInstanceId() + " state: " + sir.getState() + " status: " + sir.getStatus());
+                                + sir.getInstanceId() + " state: " + sir.getState() + " status: " + sir.getStatus() + " tags: " + sir.getTags());
                         n++;
                         if (sir.getInstanceId() != null)
                             instanceIds.add(sir.getInstanceId());
+                    }
+                    else {
+                        LOGGER.log(Level.FINE, "Spot instance request found for other template: " + sir.getSpotInstanceRequestId() + " AMI: "
+                                        + sir.getInstanceId() + " state: " + sir.getState() + " status: " + sir.getStatus() + " tags: " + sir.getTags());
                     }
                 } else {
                     // Canceled or otherwise dead
@@ -350,6 +357,7 @@ public abstract class EC2Cloud extends Cloud {
                 }
             }
         }
+        LOGGER.log(Level.FINE, "Found " + n + " running instances and active spot instance requests, now counting spot nodes without requests");
 
         // Count nodes where the spot request does not yet exist (sometimes it takes time for the request to appear
         // in the EC2 API)
@@ -390,6 +398,8 @@ public abstract class EC2Cloud extends Cloud {
                 }
             }
         }
+
+        LOGGER.log(Level.FINE, "Found " + n + " running instances, active spot instance requests, and spot nodes without requests");
 
         return n;
     }
