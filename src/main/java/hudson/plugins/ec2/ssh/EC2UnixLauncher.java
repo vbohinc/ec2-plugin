@@ -95,6 +95,12 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
             cloud.log(LOGGER, level, listener, message);
     }
 
+    protected void log(Level level, EC2Computer computer, TaskListener listener, String message, Throwable t) {
+        EC2Cloud cloud = computer.getCloud();
+        if (cloud != null)
+            cloud.log(LOGGER, level, listener, message, t);
+    }
+
     protected void logException(EC2Computer computer, TaskListener listener, String message, Throwable exception) {
         EC2Cloud cloud = computer.getCloud();
         if (cloud != null)
@@ -153,6 +159,14 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
 
             if (initScript != null && initScript.trim().length() > 0
                     && conn.exec("test -e ~/.hudson-run-init", logger) != 0) {
+                if (conn.exec("test -e /tmp/hudson-run-init.lock", logger) == 0) {
+                    log(Level.WARNING, computer, listener, "Init script execution in progress!", new Exception());
+                    return;
+                }
+                else {
+                    log(Level.INFO, computer, listener, "Normal init script execution, call stack:", new Exception());
+                    conn.exec("touch /tmp/hudson-run-init.lock ", logger);
+                }
                 logInfo(computer, listener, "Executing init script");
                 scp.put(initScript.getBytes("UTF-8"), "init.sh", tmpDir, "0700");
                 Session sess = conn.openSession();
@@ -178,7 +192,7 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
                 sess = conn.openSession();
                 sess.requestDumbPTY(); // so that the remote side bundles stdout
                                        // and stderr
-                sess.execCommand(buildUpCommand(computer, "touch ~/.hudson-run-init"));
+                sess.execCommand(buildUpCommand(computer, "mv /tmp/hudson-run-init.lock ~/.hudson-run-init"));
 
                 sess.getStdin().close(); // nothing to write here
                 sess.getStderr().close(); // we are not supposed to get anything
@@ -187,7 +201,7 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
 
                 exitStatus = waitCompletion(sess);
                 if (exitStatus != 0) {
-                    logWarning(computer, listener, "init script failed: exit code=" + exitStatus);
+                    logWarning(computer, listener, "touch hudson-run-init failed: exit code=" + exitStatus);
                     return;
                 }
                 sess.close();
