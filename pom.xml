@@ -34,7 +34,7 @@ THE SOFTWARE.
     </parent>
 
     <artifactId>ec2</artifactId>
-    <version>1.41</version>
+    <version>${revision}-oc${changelist}</version>
     <packaging>hpi</packaging>
     <name>Amazon EC2 plugin</name>
     <url>http://wiki.jenkins-ci.org/display/JENKINS/Amazon+EC2+Plugin</url>
@@ -54,7 +54,7 @@ THE SOFTWARE.
     </scm>
 
     <properties>
-        <revision>1.40</revision>
+        <revision>1.41</revision>
         <changelist>-SNAPSHOT</changelist>
         <powermock.version>1.6.3</powermock.version>
         <jenkins.version>2.60.3</jenkins.version>
