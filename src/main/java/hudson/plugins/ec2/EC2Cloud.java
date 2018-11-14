@@ -153,6 +153,8 @@ public abstract class EC2Cloud extends Cloud {
 
     private transient ReentrantLock slaveCountingLock = new ReentrantLock();
 
+    private transient CountCacheWithTimeout slaveCountCache = new CountCacheWithTimeout();
+
     private final boolean useInstanceProfileForCredentials;
 
     private final String roleArn;
@@ -216,6 +218,7 @@ public abstract class EC2Cloud extends Cloud {
 
     protected Object readResolve() {
         this.slaveCountingLock = new ReentrantLock();
+        slaveCountCache = new CountCacheWithTimeout();
         for (SlaveTemplate t : templates)
             t.parent = this;
         if (this.accessId != null && this.secretKey != null && credentialsId == null) {
@@ -556,6 +559,11 @@ public abstract class EC2Cloud extends Cloud {
      * Returns the maximum number of possible slaves that can be created.
      */
     private int getPossibleNewSlavesCount(SlaveTemplate template) throws AmazonClientException {
+        if (slaveCountCache.canUseCache(template)) {
+            final int count = slaveCountCache.getCount(template);
+            LOGGER.log(Level.FINE, "Using cached count {0} for {1}", new Object[] { count, template.description });
+            return count;
+        }
         int estimatedTotalSlaves = countCurrentEC2Slaves(null);
         int estimatedAmiSlaves = countCurrentEC2Slaves(template);
 
@@ -564,7 +572,9 @@ public abstract class EC2Cloud extends Cloud {
         LOGGER.log(Level.FINE, "Available Total Slaves: " + availableTotalSlaves + " Available AMI slaves: " + availableAmiSlaves
                 + " AMI: " + template.getAmi() + " TemplateDesc: " + template.description);
 
-        return Math.min(availableAmiSlaves, availableTotalSlaves);
+        final int possibleNewSlavesCount = Math.min(availableAmiSlaves, availableTotalSlaves);
+        slaveCountCache.setCount(template, possibleNewSlavesCount);
+        return possibleNewSlavesCount;
     }
 
     /**
@@ -848,6 +858,29 @@ public abstract class EC2Cloud extends Cloud {
             return new URL(url);
         } catch (MalformedURLException ex) {
             throw FormValidation.error("Endpoint URL is not a valid URL");
+        }
+    }
+
+    private class CountCacheWithTimeout {
+
+        private int SLAVE_COUNT_CACHE_TIME = Integer.getInteger(EC2Cloud.class.getName() + ".slavecountcachetime", 60);
+
+        // HashMap value:
+        //   element 0 = count
+        //   element 1 = timestamp
+        HashMap<SlaveTemplate, Long[]> counts = new HashMap<>();
+
+        void setCount(SlaveTemplate template, int count) {
+            counts.put(template, new Long[] {(long) count, System.nanoTime() });
+        }
+
+        int getCount(SlaveTemplate template) {
+            return counts.get(template)[0].intValue();
+        }
+
+        boolean canUseCache(SlaveTemplate template) {
+            final Long[] countTimestamp = counts.get(template);
+            return countTimestamp != null && countTimestamp[1] > System.nanoTime() - TimeUnit.SECONDS.toNanos(SLAVE_COUNT_CACHE_TIME);
         }
     }
 
