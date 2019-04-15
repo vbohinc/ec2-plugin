@@ -1309,7 +1309,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
                 @QueryParameter String type, @QueryParameter String zone, @QueryParameter String roleArn,
                 @QueryParameter String roleSessionName) throws IOException, ServletException {
 
-            String cp = "";
+            String message = "";
             String zoneStr = "";
 
             // Connect to the EC2 cloud with the access id, secret key, and
@@ -1323,15 +1323,15 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
                     // Build a new price history request with the currently
                     // selected type
                     DescribeSpotPriceHistoryRequest request = new DescribeSpotPriceHistoryRequest();
-                    // If a zone is specified, set the availability zone in the
-                    // request
-                    // Else, proceed with no availability zone which will result
-                    // with the cheapest Spot price
+
+                    // If a zone is specified, set the availability zone in the request
+                    // Else, get availability zone prices
+                    boolean allZones = false;
                     if (getAvailabilityZones(ec2).contains(zone)) {
                         request.setAvailabilityZone(zone);
-                        zoneStr = zone + " availability zone";
-                    } else {
-                        zoneStr = region + " region";
+                    }
+                    else {
+                        allZones = true;
                     }
 
                     /*
@@ -1361,16 +1361,40 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
                     request.setInstanceTypes(instanceType);
                     request.setStartTime(new Date());
 
-                    // Retrieve the price history request result and store the
-                    // current price
+                    // Retrieve the price history request result and store the current price
                     DescribeSpotPriceHistoryResult result = ec2.describeSpotPriceHistory(request);
+                    List<String> prices = new ArrayList<>(result.getSpotPriceHistory().size());
 
-                    if (!result.getSpotPriceHistory().isEmpty()) {
-                        SpotPrice currentPrice = result.getSpotPriceHistory().get(0);
+                    if (allZones) {
+                        final List<SpotPrice> spotPriceHistory = result.getSpotPriceHistory();
+                        spotPriceHistory.sort(new Comparator<SpotPrice>() {
+                            @Override
+                            public int compare(SpotPrice o1, SpotPrice o2) {
+                                int prodCmp = o1.getProductDescription().compareTo(o2.getProductDescription());
+                                return prodCmp != 0 ? prodCmp : o1.getAvailabilityZone().compareTo(o2.getAvailabilityZone());
+                            }
+                        });
 
-                        cp = currentPrice.getSpotPrice();
+                        for (SpotPrice spotPrice : result.getSpotPriceHistory()) {
+                            prices.add(String.format("%s [%s]: $%.3f", spotPrice.getProductDescription(),
+                                                     spotPrice.getAvailabilityZone(),
+                                                     Float.parseFloat(spotPrice.getSpotPrice())));
+                        }
+                        zoneStr = region + " region";
                     }
-
+                    else {
+                        for (SpotPrice spotPrice : result.getSpotPriceHistory()) {
+                            prices.add(String.format("%s: $%.3f", spotPrice.getProductDescription(), Float.parseFloat(spotPrice.getSpotPrice())));
+                        }
+                        zoneStr = zone + " availability zone";
+                    }
+                    if (result.getSpotPriceHistory().isEmpty()) {
+                        message = String.format("No prices available for %s in %s", ec2Type.toString(), zoneStr);
+                    }
+                    else {
+                        message = String.format("Current spot prices for %s in %s are:\n%s",
+                                                ec2Type.toString(), zoneStr, String.join("\n", prices));
+                    }
                 } catch (AmazonServiceException e) {
                     return FormValidation.error(e.getMessage());
                 }
@@ -1379,12 +1403,10 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
              * If we could not return the current price of the instance display an error Else, remove the additional
              * zeros from the current price and return it to the interface in the form of a message
              */
-            if (cp.isEmpty()) {
-                return FormValidation.error("Could not retrieve current Spot price");
+            if (message.isEmpty()) {
+                return FormValidation.error("Could not retrieve current spot price");
             } else {
-                cp = cp.substring(0, cp.length() - 3);
-
-                return FormValidation.ok("The current Spot price for a " + type + " in the " + zoneStr + " is $" + cp);
+                return FormValidation.ok(message);
             }
         }
     }
